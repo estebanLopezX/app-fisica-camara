@@ -1,0 +1,35 @@
+workflows:
+  flutter-workflow:
+    name: Build Flutter App
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Get Flutter dependencies
+        script: flutter pub get
+
+      - name: Analyze project source
+        script: flutter analyze
+
+      - name: Run tests
+        script: flutter test
+
+      - name: Build APK for Android
+        script: flutter build apk --release
+
+      - name: Build iOS app
+        script: flutter build ios --release --no-codesign
+
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/ios/ipa
+
+    publishing:
+      email:
+        recipients:
+          - mercanet6@gmail.com
