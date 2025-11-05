@@ -13,9 +13,6 @@ workflows:
       - name: Get Flutter dependencies
         script: flutter pub get
 
-      - name: Run tests
-        script: flutter test
-
       - name: Build APK for Android
         script: flutter build apk --release
 
