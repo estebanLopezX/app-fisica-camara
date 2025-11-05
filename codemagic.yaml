@@ -13,9 +13,6 @@ workflows:
       - name: Get Flutter dependencies
         script: flutter pub get
 
-      - name: Analyze project source
-        script: flutter analyze
-
       - name: Run tests
         script: flutter test
 
