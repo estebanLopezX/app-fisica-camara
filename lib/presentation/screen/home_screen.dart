@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:parabola_detector/presentation/screen/camera_screen.dart';
 import '../../core/theme.dart';
 import '../../widgets/custom_navbar.dart';
 
@@ -14,7 +15,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<Widget> screens = [
     const Center(child: Text("⭐ Navegar")), // Aqui va ir las formulas y demás
-    const Center(child: Text("📷 Cámara")),
+    const CameraScreen(),
     const Center(child: Text("👤 Perfil")),
   ];
 
@@ -29,7 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() {
             selectedIndex = index;
           });
-        }, 
+        },
       ),
     );
   }

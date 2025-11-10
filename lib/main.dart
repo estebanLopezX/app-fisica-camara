@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:parabola_detector/presentation/screen/camera_screen.dart';
 import 'core/theme.dart';
 import 'presentation/screen/login_screen.dart';
 import 'presentation/screen/home_screen.dart';
@@ -13,7 +14,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Mi App Parabólica',
       theme: appTheme, // 🎨 Se aplica el theme global
-      home: const LoginScreen(),
+      home: const HomeScreen(),
     );
   }
 }
