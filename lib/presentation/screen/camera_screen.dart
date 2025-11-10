@@ -2,8 +2,12 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:parabola_detector/presentation/screen/motion_results_screen.dart';
+import 'package:parabola_detector/tools/motion_detector.dart';
+import 'package:parabola_detector/tools/motion_painter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart'; // 👈 opcional si luego analizas video
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -20,13 +24,17 @@ class _CameraScreenState extends State<CameraScreen> {
   Timer? _timer;
   int _recordDuration = 0;
 
+  Rect? _motionRect;
+
+  late MotionDetector _motionDetector;
+
   @override
   void initState() {
     super.initState();
+    _motionDetector = MotionDetector();
     _initializeCamera();
   }
 
-  /// Inicializa la cámara y solicita permisos
   Future<void> _initializeCamera() async {
     final cameraStatus = await Permission.camera.request();
     final micStatus = await Permission.microphone.request();
@@ -52,18 +60,28 @@ class _CameraScreenState extends State<CameraScreen> {
 
       _controller = CameraController(
         firstCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: true,
       );
 
       await _controller!.initialize();
+
+      // 🔹 Activar análisis de frames en tiempo real
+      await _controller!.startImageStream((CameraImage image) {
+        final rect = _motionDetector.processFrame(image);
+        if (rect != null && mounted) {
+          setState(() {
+            _motionRect = rect;
+          });
+        }
+      });
+
       if (mounted) setState(() => _isCameraInitialized = true);
     } catch (e) {
       debugPrint('❌ Error al inicializar la cámara: $e');
     }
   }
 
-  /// Alterna entre iniciar y detener grabación
   Future<void> _toggleRecording() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
 
@@ -76,7 +94,6 @@ class _CameraScreenState extends State<CameraScreen> {
           _recordDuration = 0;
         });
 
-        // 📂 Carpeta pública en DCIM/ParabolaDetector
         final directory = Directory(
           '/storage/emulated/0/DCIM/ParabolaDetector',
         );
@@ -89,7 +106,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
         await File(videoFile.path).copy(savedPath);
 
-        // 🔄 Forzar actualización de la galería
         await Process.run('am', [
           'broadcast',
           '-a',
@@ -105,6 +121,22 @@ class _CameraScreenState extends State<CameraScreen> {
         }
 
         debugPrint("✅ Video guardado en galería: $savedPath");
+
+        // 🧠 Aquí podrías analizar el video si agregas soporte luego
+        debugPrint("🧠 Análisis de movimiento completado.");
+
+        // 👇 Muestra la pantalla de resultados con el historial detectado
+        final motionRects = _motionDetector.motionHistory;
+
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MotionResultsScreen(rects: motionRects),
+            ),
+          );
+          _motionDetector.motionHistory.clear();
+        }
       } catch (e) {
         debugPrint("❌ Error al detener o guardar el video: $e");
         if (mounted) {
@@ -133,7 +165,6 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  /// Inicia el cronómetro mientras graba
   void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
@@ -141,7 +172,6 @@ class _CameraScreenState extends State<CameraScreen> {
     });
   }
 
-  /// Formato mm:ss para mostrar el tiempo
   String _formatDuration(int seconds) {
     final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
     final secs = (seconds % 60).toString().padLeft(2, '0');
@@ -168,7 +198,19 @@ class _CameraScreenState extends State<CameraScreen> {
         children: [
           CameraPreview(_controller!),
 
-          // 🔴 Borde rojo parpadeante cuando graba
+          if (_motionRect != null)
+            Positioned.fill(
+              child: CustomPaint(
+                painter: MotionPainter(
+                  _motionRect!,
+                  cameraPreviewSize: Size(
+                    _controller!.value.previewSize!.height,
+                    _controller!.value.previewSize!.width,
+                  ),
+                ),
+              ),
+            ),
+
           if (_isRecording)
             AnimatedContainer(
               duration: const Duration(milliseconds: 500),
@@ -176,7 +218,7 @@ class _CameraScreenState extends State<CameraScreen> {
                 border: Border.all(
                   color: Colors.red.withOpacity(
                     (_recordDuration % 2 == 0) ? 1.0 : 0.2,
-                  ), // parpadeo
+                  ),
                   width: 6,
                 ),
               ),
@@ -196,7 +238,6 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
 
-          // ⏱ Cronómetro arriba a la derecha mientras graba
           if (_isRecording)
             Positioned(
               top: 50,
