@@ -2,12 +2,12 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:parabola_detector/presentation/screen/motion_results_screen.dart';
+import 'package:parabola_detector/presentation/screen/video_uploader.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:parabola_detector/tools/motion_detector.dart';
 import 'package:parabola_detector/tools/motion_painter.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:video_player/video_player.dart'; // 👈 opcional si luego analizas video
+import 'package:parabola_detector/presentation/screen/motion_results_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -23,10 +23,15 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Timer? _timer;
   int _recordDuration = 0;
-
   Rect? _motionRect;
 
   late MotionDetector _motionDetector;
+  final List<Rect> _motionRects = [];
+
+  // ✅ Instancia del uploader (usa la IP del PC donde corre server.py)
+  late final VideoUploader uploader = VideoUploader(
+    serverUrl: 'http://192.168.1.8:8000',
+  );
 
   @override
   void initState() {
@@ -40,22 +45,16 @@ class _CameraScreenState extends State<CameraScreen> {
     final micStatus = await Permission.microphone.request();
 
     if (!cameraStatus.isGranted || !micStatus.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("❌ Se necesitan permisos de cámara y micrófono"),
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("❌ Se necesitan permisos de cámara y micrófono"),
+        ),
+      );
       return;
     }
 
     try {
       final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        throw Exception("No se encontraron cámaras disponibles");
-      }
-
       final firstCamera = cameras.first;
 
       _controller = CameraController(
@@ -66,17 +65,18 @@ class _CameraScreenState extends State<CameraScreen> {
 
       await _controller!.initialize();
 
-      // 🔹 Activar análisis de frames en tiempo real
       await _controller!.startImageStream((CameraImage image) {
         final rect = _motionDetector.processFrame(image);
         if (rect != null && mounted) {
           setState(() {
             _motionRect = rect;
+            _motionRects.add(rect);
           });
+          debugPrint("📦 Movimiento detectado: $_motionRect");
         }
       });
 
-      if (mounted) setState(() => _isCameraInitialized = true);
+      setState(() => _isCameraInitialized = true);
     } catch (e) {
       debugPrint('❌ Error al inicializar la cámara: $e');
     }
@@ -88,24 +88,23 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_isRecording) {
       try {
         final XFile videoFile = await _controller!.stopVideoRecording();
+        _timer?.cancel();
         setState(() {
           _isRecording = false;
-          _timer?.cancel();
           _recordDuration = 0;
         });
 
+        // 📂 Guardar video localmente
         final directory = Directory(
           '/storage/emulated/0/DCIM/ParabolaDetector',
         );
-        if (!directory.existsSync()) {
-          directory.createSync(recursive: true);
-        }
+        if (!directory.existsSync()) directory.createSync(recursive: true);
 
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final savedPath = '${directory.path}/ParabolaDetector_$timestamp.mp4';
-
         await File(videoFile.path).copy(savedPath);
 
+        // 📲 Actualizar galería Android
         await Process.run('am', [
           'broadcast',
           '-a',
@@ -114,36 +113,52 @@ class _CameraScreenState extends State<CameraScreen> {
           'file://$savedPath',
         ]);
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("✅ Video guardado en: $savedPath")),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("✅ Video guardado en: $savedPath")),
+        );
 
-        debugPrint("✅ Video guardado en galería: $savedPath");
+        // 🚀 Enviar video al servidor Python
+        await uploader.sendVideo(File(savedPath));
 
-        // 🧠 Aquí podrías analizar el video si agregas soporte luego
-        debugPrint("🧠 Análisis de movimiento completado.");
+        // 🧠 Mostrar resultados si hay movimientos detectados
+        if (_motionRects.isNotEmpty) {
+          final width = _controller!.value.previewSize?.width ?? 640;
+          final height = _controller!.value.previewSize?.height ?? 480;
 
-        // 👇 Muestra la pantalla de resultados con el historial detectado
-        final motionRects = _motionDetector.motionHistory;
+          final validRects = _motionRects
+              .where(
+                (r) =>
+                    r.width > 10 &&
+                    r.height > 10 &&
+                    r.width < width * 0.95 &&
+                    r.height < height * 0.95,
+              )
+              .toList();
 
-        if (mounted) {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => MotionResultsScreen(rects: motionRects),
+              builder: (_) => MotionResultsScreen.fromCamera(
+                motionRects: validRects,
+                controller: _controller!,
+                fps: 30.0,
+              ),
             ),
           );
-          _motionDetector.motionHistory.clear();
-        }
-      } catch (e) {
-        debugPrint("❌ Error al detener o guardar el video: $e");
-        if (mounted) {
+        } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("❌ Error guardando el video")),
+            const SnackBar(
+              content: Text(
+                "⚠️ No se detectaron movimientos durante la grabación",
+              ),
+            ),
           );
         }
+
+        _motionRects.clear();
+        _motionDetector.motionHistory.clear();
+      } catch (e) {
+        debugPrint("❌ Error al detener la grabación: $e");
       }
     } else {
       try {
@@ -153,12 +168,9 @@ class _CameraScreenState extends State<CameraScreen> {
           _recordDuration = 0;
         });
         _startTimer();
-
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text("🎬 Grabando...")));
-        }
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("🎬 Grabando...")));
       } catch (e) {
         debugPrint("❌ Error al iniciar la grabación: $e");
       }
@@ -167,7 +179,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _startTimer() {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _recordDuration++);
     });
   }
@@ -224,39 +236,19 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
 
-          const Positioned(
-            top: 50,
-            left: 20,
-            child: Text(
-              "Cámara activa",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                shadows: [Shadow(blurRadius: 6, color: Colors.black)],
-              ),
-            ),
-          ),
-
           if (_isRecording)
             Positioned(
               top: 50,
               right: 20,
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.fiber_manual_record,
-                    color: Colors.red,
-                    size: 18,
-                  ),
+                  const Icon(Icons.fiber_manual_record, color: Colors.red),
                   const SizedBox(width: 6),
                   Text(
                     _formatDuration(_recordDuration),
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      shadows: [Shadow(blurRadius: 6, color: Colors.black)],
                     ),
                   ),
                 ],
