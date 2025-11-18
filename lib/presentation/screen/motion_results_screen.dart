@@ -8,12 +8,16 @@ class MotionResultsScreen extends StatelessWidget {
   final double frameHeight;
   final double fps;
 
+  /// 🔹 FACTOR DE CONVERSIÓN PX → METROS (solo añadí esto)
+  final double pxToMeters;
+
   const MotionResultsScreen({
     super.key,
     required this.rects,
     required this.frameWidth,
     required this.frameHeight,
     this.fps = 30.0,
+    required this.pxToMeters, // agregado
   });
 
   /// 🔹 Factory constructor para crear la pantalla desde un CameraController
@@ -21,6 +25,7 @@ class MotionResultsScreen extends StatelessWidget {
     required List<Rect> motionRects,
     required CameraController controller,
     double fps = 30.0,
+    required double pxToMeters, // agregado
   }) {
     final width = controller.value.previewSize?.width ?? 640;
     final height = controller.value.previewSize?.height ?? 480;
@@ -35,6 +40,7 @@ class MotionResultsScreen extends StatelessWidget {
       frameWidth: width,
       frameHeight: height,
       fps: fps,
+      pxToMeters: pxToMeters, // agregado
     );
   }
 
@@ -46,7 +52,7 @@ class MotionResultsScreen extends StatelessWidget {
     }
     print("📏 FrameWidth: $frameWidth | FrameHeight: $frameHeight | FPS: $fps");
 
-    final analysis = _analyzeMovements(rects, fps: fps);
+    final analysis = _analyzeMovements(rects, fps: fps, pxToMeters: pxToMeters);
 
     return Scaffold(
       appBar: AppBar(
@@ -124,7 +130,12 @@ class MotionResultsScreen extends StatelessWidget {
     );
   }
 
-  static String _analyzeMovements(List<Rect> rects, {required double fps}) {
+  /// 🔥 AQUÍ SE INTEGRA LA CONVERSIÓN DE UNIDADES
+  static String _analyzeMovements(
+    List<Rect> rects, {
+    required double fps,
+    required double pxToMeters,
+  }) {
     print(
       "🔎 [MotionResultsScreen] Iniciando análisis con ${rects.length} rects...",
     );
@@ -134,8 +145,12 @@ class MotionResultsScreen extends StatelessWidget {
       return "Sin datos suficientes para el análisis.";
     }
 
-    double totalDistance = 0;
-    double maxSpeed = 0;
+    double totalDistancePx = 0;
+    double maxSpeedPx = 0;
+
+    double totalDistanceM = 0;
+    double maxSpeedM = 0;
+
     double totalTime = (rects.length - 1) / fps;
 
     double sumX = 0;
@@ -160,29 +175,46 @@ class MotionResultsScreen extends StatelessWidget {
         (rects[i].top + rects[i].bottom) / 2,
       );
 
-      final distance = (currCenter - prevCenter).distance;
-      totalDistance += distance;
+      final distancePx = (currCenter - prevCenter).distance;
+      totalDistancePx += distancePx;
 
-      final speed = distance * fps;
-      if (speed > maxSpeed) maxSpeed = speed;
+      final distanceM = distancePx * pxToMeters; // ← conversión
+      totalDistanceM += distanceM;
+
+      final speedPx = distancePx * fps;
+      if (speedPx > maxSpeedPx) maxSpeedPx = speedPx;
+
+      final speedM = distanceM * fps; // ← conversión
+      if (speedM > maxSpeedM) maxSpeedM = speedM;
     }
 
-    final avgSpeed = totalDistance / totalTime;
+    final avgSpeedPx = totalDistancePx / totalTime;
+    final avgSpeedM = totalDistanceM / totalTime;
+
     final avgCenter = Offset(sumX / rects.length, sumY / rects.length);
 
     print("📊 [Análisis completado]");
-    print(" - Distancia total: ${totalDistance.toStringAsFixed(2)} px");
-    print(" - Velocidad promedio: ${avgSpeed.toStringAsFixed(2)} px/s");
-    print(" - Velocidad máxima: ${maxSpeed.toStringAsFixed(2)} px/s");
+    print(" - Distancia total: ${totalDistancePx.toStringAsFixed(2)} px");
+    print(" - Distancia total física: ${totalDistanceM.toStringAsFixed(4)} m");
+    print(" - Velocidad promedio: ${avgSpeedPx.toStringAsFixed(2)} px/s");
+    print(" - Velocidad promedio física: ${avgSpeedM.toStringAsFixed(4)} m/s");
+    print(" - Velocidad máxima: ${maxSpeedPx.toStringAsFixed(2)} px/s");
+    print(" - Velocidad máxima física: ${maxSpeedM.toStringAsFixed(4)} m/s");
     print(" - Duración total: ${totalTime.toStringAsFixed(2)} s");
     print(
       " - Centro promedio: (${avgCenter.dx.toStringAsFixed(1)}, ${avgCenter.dy.toStringAsFixed(1)})",
     );
 
     return """
-📏 Distancia total recorrida: ${totalDistance.toStringAsFixed(2)} px
-⚡ Velocidad promedio: ${avgSpeed.toStringAsFixed(2)} px/s
-🚀 Velocidad máxima: ${maxSpeed.toStringAsFixed(2)} px/s
+📏 Distancia total recorrida: ${totalDistancePx.toStringAsFixed(2)} px  
+📏 Distancia total recorrida (física): ${totalDistanceM.toStringAsFixed(4)} m  
+
+⚡ Velocidad promedio: ${avgSpeedPx.toStringAsFixed(2)} px/s  
+⚡ Velocidad promedio (física): ${avgSpeedM.toStringAsFixed(4)} m/s  
+
+🚀 Velocidad máxima: ${maxSpeedPx.toStringAsFixed(2)} px/s  
+🚀 Velocidad máxima (física): ${maxSpeedM.toStringAsFixed(4)} m/s  
+
 ⏱️ Duración total: ${totalTime.toStringAsFixed(2)} s
 🎯 Centro promedio del movimiento: (${avgCenter.dx.toStringAsFixed(1)}, ${avgCenter.dy.toStringAsFixed(1)})
 """;

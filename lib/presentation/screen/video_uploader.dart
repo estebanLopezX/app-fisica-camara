@@ -1,32 +1,35 @@
-import 'package:http/http.dart' as http;
 import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class VideoUploader {
   final String serverUrl;
 
   VideoUploader({required this.serverUrl});
 
-  Future<void> sendVideo(File videoFile) async {
+  Future<Map<String, dynamic>?> sendVideo(File videoFile) async {
     try {
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$serverUrl/analyze_video/'),
+      final uri = Uri.parse("$serverUrl/analyze_video/");
+      final request = http.MultipartRequest('POST', uri);
+
+      request.files.add(
+        await http.MultipartFile.fromPath('file', videoFile.path),
       );
 
-      request.files.add(await http.MultipartFile.fromPath('file', videoFile.path));
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
 
-      print('📤 Enviando video al servidor: ${videoFile.path}');
-
-      var response = await request.send();
+      print("📩 Respuesta del servidor: ${response.body}");
 
       if (response.statusCode == 200) {
-        final respStr = await response.stream.bytesToString();
-        print('✅ Resultados del servidor: $respStr');
+        return jsonDecode(response.body);
       } else {
-        print('❌ Error al enviar video: ${response.statusCode}');
+        print("❌ Error del servidor: ${response.statusCode}");
+        return null;
       }
     } catch (e) {
-      print('⚠️ Error al conectar con el servidor: $e');
+      print("❌ Error enviando video: $e");
+      return null;
     }
   }
 }

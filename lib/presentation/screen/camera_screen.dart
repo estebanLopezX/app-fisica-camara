@@ -1,13 +1,14 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:parabola_detector/presentation/screen/video_uploader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:parabola_detector/tools/motion_detector.dart';
 import 'package:parabola_detector/tools/motion_painter.dart';
 import 'package:parabola_detector/presentation/screen/motion_results_screen.dart';
+import 'package:parabola_detector/presentation/screen/video_uploader.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -23,15 +24,18 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Timer? _timer;
   int _recordDuration = 0;
-  Rect? _motionRect;
 
   late MotionDetector _motionDetector;
-  final List<Rect> _motionRects = [];
+  Rect? _motionRect;
 
-  // ✅ Instancia del uploader (usa la IP del PC donde corre server.py)
+  // ⛔ YA NO USAMOS motionRects locales
+  // final List<Rect> _motionRects = [];
+
   late final VideoUploader uploader = VideoUploader(
     serverUrl: 'http://192.168.1.8:8000',
   );
+
+  List<Rect> serverRects = []; // ⬅️ AQUÍ GUARDAMOS RECTÁNGULOS DEL SERVER
 
   @override
   void initState() {
@@ -41,13 +45,13 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    final cameraStatus = await Permission.camera.request();
-    final micStatus = await Permission.microphone.request();
+    final camPermission = await Permission.camera.request();
+    final micPermission = await Permission.microphone.request();
 
-    if (!cameraStatus.isGranted || !micStatus.isGranted) {
+    if (!camPermission.isGranted || !micPermission.isGranted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("❌ Se necesitan permisos de cámara y micrófono"),
+          content: Text("❌ Se requieren permisos de cámara y micrófono"),
         ),
       );
       return;
@@ -55,46 +59,41 @@ class _CameraScreenState extends State<CameraScreen> {
 
     try {
       final cameras = await availableCameras();
-      final firstCamera = cameras.first;
-
       _controller = CameraController(
-        firstCamera,
+        cameras.first,
         ResolutionPreset.medium,
         enableAudio: true,
       );
 
       await _controller!.initialize();
 
-      await _controller!.startImageStream((CameraImage image) {
+      // 🔹 Stream para detectar movimiento visual local (solo para overlay)
+      await _controller!.startImageStream((image) {
         final rect = _motionDetector.processFrame(image);
         if (rect != null && mounted) {
           setState(() {
             _motionRect = rect;
-            _motionRects.add(rect);
           });
-          debugPrint("📦 Movimiento detectado: $_motionRect");
         }
       });
 
       setState(() => _isCameraInitialized = true);
     } catch (e) {
-      debugPrint('❌ Error al inicializar la cámara: $e');
+      debugPrint("❌ Error inicializando cámara: $e");
     }
   }
 
   Future<void> _toggleRecording() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    if (_controller == null) return;
 
     if (_isRecording) {
+      // 🔴 DETENER GRABACIÓN
       try {
-        final XFile videoFile = await _controller!.stopVideoRecording();
+        XFile recorded = await _controller!.stopVideoRecording();
         _timer?.cancel();
-        setState(() {
-          _isRecording = false;
-          _recordDuration = 0;
-        });
 
-        // 📂 Guardar video localmente
+        setState(() => _isRecording = false);
+
         final directory = Directory(
           '/storage/emulated/0/DCIM/ParabolaDetector',
         );
@@ -102,9 +101,10 @@ class _CameraScreenState extends State<CameraScreen> {
 
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final savedPath = '${directory.path}/ParabolaDetector_$timestamp.mp4';
-        await File(videoFile.path).copy(savedPath);
 
-        // 📲 Actualizar galería Android
+        await File(recorded.path).copy(savedPath);
+
+        // 🔄 Actualizar galería
         await Process.run('am', [
           'broadcast',
           '-a',
@@ -113,81 +113,66 @@ class _CameraScreenState extends State<CameraScreen> {
           'file://$savedPath',
         ]);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("✅ Video guardado en: $savedPath")),
-        );
+        // 🚀 **ENVIAR VIDEO AL SERVIDOR**
+        final response = await uploader.sendVideo(File(savedPath));
 
-        // 🚀 Enviar video al servidor Python
-        await uploader.sendVideo(File(savedPath));
+        if (response != null && response.containsKey("rects")) {
+          print("🟢 Rectángulos recibidos del servidor:");
+          print(response["rects"]);
 
-        // 🧠 Mostrar resultados si hay movimientos detectados
-        if (_motionRects.isNotEmpty) {
-          final width = _controller!.value.previewSize?.width ?? 640;
-          final height = _controller!.value.previewSize?.height ?? 480;
+          serverRects = [];
 
-          final validRects = _motionRects
-              .where(
-                (r) =>
-                    r.width > 10 &&
-                    r.height > 10 &&
-                    r.width < width * 0.95 &&
-                    r.height < height * 0.95,
-              )
-              .toList();
+          for (var r in response["rects"]) {
+            if (r.length == 4) {
+              serverRects.add(
+                Rect.fromLTWH(
+                  r[0].toDouble(),
+                  r[1].toDouble(),
+                  r[2].toDouble(),
+                  r[3].toDouble(),
+                ),
+              );
+            }
+          }
+        }
 
+        // 👉 SI HAY RECTÁNGULOS, IR A LA PANTALLA DE RESULTADOS
+        if (serverRects.isNotEmpty) {
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (_) => MotionResultsScreen.fromCamera(
-                motionRects: validRects,
+                motionRects: serverRects,
                 controller: _controller!,
-                fps: 30.0,
+                fps: 30,
+                pxToMeters: 0.0007436,
               ),
             ),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                "⚠️ No se detectaron movimientos durante la grabación",
-              ),
-            ),
+            const SnackBar(content: Text("⚠️ No se detectaron movimientos.")),
           );
         }
-
-        _motionRects.clear();
-        _motionDetector.motionHistory.clear();
       } catch (e) {
-        debugPrint("❌ Error al detener la grabación: $e");
+        debugPrint("❌ Error al detener grabación: $e");
       }
     } else {
+      // 🟢 INICIAR GRABACIÓN
       try {
         await _controller!.startVideoRecording();
-        setState(() {
-          _isRecording = true;
-          _recordDuration = 0;
-        });
+        setState(() => _isRecording = true);
         _startTimer();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("🎬 Grabando...")));
       } catch (e) {
-        debugPrint("❌ Error al iniciar la grabación: $e");
+        debugPrint("❌ Error al iniciar grabación: $e");
       }
     }
   }
 
   void _startTimer() {
-    _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _recordDuration++);
     });
-  }
-
-  String _formatDuration(int seconds) {
-    final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
-    final secs = (seconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$secs';
   }
 
   @override
@@ -200,7 +185,10 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   Widget build(BuildContext context) {
     if (!_isCameraInitialized) {
-      return const Center(child: CircularProgressIndicator());
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     return Scaffold(
@@ -210,6 +198,7 @@ class _CameraScreenState extends State<CameraScreen> {
         children: [
           CameraPreview(_controller!),
 
+          // 🔴 Dibujo del rect local
           if (_motionRect != null)
             Positioned.fill(
               child: CustomPaint(
@@ -223,6 +212,7 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
 
+          // ❤️ Animación borde grabación
           if (_isRecording)
             AnimatedContainer(
               duration: const Duration(milliseconds: 500),
@@ -236,25 +226,24 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
 
+          // ⏱️ Temporizador
           if (_isRecording)
             Positioned(
-              top: 50,
+              top: 40,
               right: 20,
               child: Row(
                 children: [
                   const Icon(Icons.fiber_manual_record, color: Colors.red),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 8),
                   Text(
-                    _formatDuration(_recordDuration),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    "${(_recordDuration ~/ 60).toString().padLeft(2, '0')}:${(_recordDuration % 60).toString().padLeft(2, '0')}",
+                    style: const TextStyle(color: Colors.white),
                   ),
                 ],
               ),
             ),
 
+          // 🎥 Botón grabar / parar
           Positioned(
             bottom: 40,
             left: 0,
@@ -262,8 +251,8 @@ class _CameraScreenState extends State<CameraScreen> {
             child: Center(
               child: FloatingActionButton(
                 backgroundColor: _isRecording ? Colors.red : Colors.green,
-                onPressed: _toggleRecording,
                 child: Icon(_isRecording ? Icons.stop : Icons.videocam),
+                onPressed: _toggleRecording,
               ),
             ),
           ),
