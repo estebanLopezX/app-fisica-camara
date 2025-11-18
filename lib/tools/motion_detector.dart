@@ -72,6 +72,8 @@ class MotionDetector {
         lastMotionRect = rect;
 
         developer.log("🟥 Movimiento detectado: $diffCount píxeles → $rect");
+
+
         return rect;
       } else {
         developer.log("🟦 Sin movimiento significativo ($diffCount píxeles)");

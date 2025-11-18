@@ -28,6 +28,10 @@ class _CameraScreenState extends State<CameraScreen> {
   late MotionDetector _motionDetector;
   Rect? _motionRect;
 
+  int frameCount = 0;
+  DateTime lastFpsTime = DateTime.now();
+  double realFps = 0;
+
   // ⛔ YA NO USAMOS motionRects locales
   // final List<Rect> _motionRects = [];
 
@@ -69,6 +73,18 @@ class _CameraScreenState extends State<CameraScreen> {
 
       // 🔹 Stream para detectar movimiento visual local (solo para overlay)
       await _controller!.startImageStream((image) {
+        frameCount++;
+
+        final now = DateTime.now();
+        final diffMs = now.difference(lastFpsTime).inMilliseconds;
+
+        if (diffMs >= 1000) {
+          realFps = frameCount * 1000 / diffMs;
+          frameCount = 0;
+          lastFpsTime = now;
+
+          print("📷 FPS reales: ${realFps.toStringAsFixed(2)}");
+        }
         final rect = _motionDetector.processFrame(image);
         if (rect != null && mounted) {
           setState(() {
@@ -118,6 +134,8 @@ class _CameraScreenState extends State<CameraScreen> {
 
         if (response != null && response.containsKey("rects")) {
           print("🟢 Rectángulos recibidos del servidor:");
+          print("RESOLUCIÓN REAL: ${_controller!.value.previewSize}");
+
           print(response["rects"]);
 
           serverRects = [];
@@ -141,11 +159,11 @@ class _CameraScreenState extends State<CameraScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => MotionResultsScreen.fromCamera(
+              builder: (_) => MotionResultsWithParabola.fromCamera(
                 motionRects: serverRects,
                 controller: _controller!,
                 fps: 30,
-                pxToMeters: 0.0007436,
+                pxToMeters: 0.000599,
               ),
             ),
           );
