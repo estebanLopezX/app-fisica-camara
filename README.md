@@ -24,6 +24,6 @@ lib/
 
 
 <h3>RESULTADOS </h3>
-<img width="960" height="1280" alt="image" src="https://github.com/user-attachments/assets/e400e7be-f436-4f20-af0f-6dd74279c2e8" />
+<img width="450" height="600" alt="image" src="https://github.com/user-attachments/assets/e400e7be-f436-4f20-af0f-6dd74279c2e8" />
 <h5> DISEÑO </h5>
 <img width="1245" height="315" alt="image" src="https://github.com/user-attachments/assets/7a752a76-026d-49ca-8961-1732a2ba7169" />
